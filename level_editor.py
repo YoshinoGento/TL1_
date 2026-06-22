@@ -1,5 +1,6 @@
 import bpy
 import math
+from bpy_extras.io_utils import ExportHelper
 
 # ブレンダーに登録するアドオン情報
 bl_info = {
@@ -71,11 +72,81 @@ class MYADDON_OT_create_ico_sphere(bpy.types.Operator):
 # ==========================================
 # オペレータクラス：シーン出力
 # ==========================================
-class MYADDON_OT_export_scene(bpy.types.Operator):
+class MYADDON_OT_export_scene(bpy.types.Operator, ExportHelper):
     bl_idname = "myaddon.export_scene"
     bl_label = "シーン出力"
-    bl_description = "現在のシーン内のオブジェクト情報をコンソールに出力します"
+    bl_description = "現在のシーン内のオブジェクト情報をファイルに出力します"
     bl_options = {'REGISTER'}
+
+    # 出力ファイルの拡張子
+    filename_ext = ".scene"
+
+    def write_and_print(self, file, text):
+        """
+        コンソール表示とファイル出力を同時に行う関数
+        """
+        print(text)
+        file.write(text)
+        file.write("\n")
+
+    def parse_scene_recursive(self, file, obj, level):
+        """
+        オブジェクトを1つ出力し、その子オブジェクトも再帰的に出力する関数
+        """
+
+        # 深さに応じてインデントを作る
+        indent = ""
+        for _ in range(level):
+            indent += "\t"
+
+        # オブジェクト名
+        self.write_and_print(
+            file,
+            indent + obj.type + " - " + obj.name
+        )
+
+        # ローカルトランスフォームを取得
+        trans, rot, scale = obj.matrix_local.decompose()
+        rot = rot.to_euler()
+
+        # 回転をラジアンから度数に変換
+        rot_x = math.degrees(rot.x)
+        rot_y = math.degrees(rot.y)
+        rot_z = math.degrees(rot.z)
+
+        # トランスフォーム情報を出力
+        self.write_and_print(
+            file,
+            indent + "Trans({:.6f},{:.6f},{:.6f})".format(
+                trans.x,
+                trans.y,
+                trans.z
+            )
+        )
+
+        self.write_and_print(
+            file,
+            indent + "Rot({:.6f},{:.6f},{:.6f})".format(
+                rot_x,
+                rot_y,
+                rot_z
+            )
+        )
+
+        self.write_and_print(
+            file,
+            indent + "Scale({:.6f},{:.6f},{:.6f})".format(
+                scale.x,
+                scale.y,
+                scale.z
+            )
+        )
+
+        self.write_and_print(file, "")
+
+        # 子オブジェクトを再帰的に出力
+        for child in obj.children:
+            self.parse_scene_recursive(file, child, level + 1)
 
     def execute(self, context):
         scene = context.scene
@@ -84,36 +155,27 @@ class MYADDON_OT_export_scene(bpy.types.Operator):
             self.report({'ERROR'}, "有効なシーンがありません。")
             return {'CANCELLED'}
 
+        if self.filepath == "":
+            self.report({'ERROR'}, "出力先ファイルパスが空です。")
+            return {'CANCELLED'}
+
         print("シーン情報をExportします")
+        print("シーン情報出力開始... %r" % self.filepath)
 
-        for obj in scene.objects:
-            print(f"{obj.type} - {obj.name}")
+        try:
+            with open(self.filepath, "w", encoding="utf-8") as file:
+                self.write_and_print(file, "SCENE")
 
-            trans, rot, scale = obj.matrix_local.decompose()
-            rot = rot.to_euler()
+                # シーン直下のオブジェクトだけを起点にする
+                for obj in scene.objects:
+                    if obj.parent is not None:
+                        continue
 
-            print("Trans({:.6f},{:.6f},{:.6f})".format(
-                trans.x,
-                trans.y,
-                trans.z
-            ))
+                    self.parse_scene_recursive(file, obj, 0)
 
-            print("Rot({:.6f},{:.6f},{:.6f})".format(
-                math.degrees(rot.x),
-                math.degrees(rot.y),
-                math.degrees(rot.z)
-            ))
-
-            print("Scale({:.6f},{:.6f},{:.6f})".format(
-                scale.x,
-                scale.y,
-                scale.z
-            ))
-
-            if obj.parent is not None:
-                print(f"Parent:{obj.parent.name}")
-
-            print()
+        except OSError as error:
+            self.report({'ERROR'}, "ファイル出力に失敗しました: " + str(error))
+            return {'CANCELLED'}
 
         print("シーン情報をExportしました")
         self.report({'INFO'}, "シーン情報をExportしました")
