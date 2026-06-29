@@ -8,7 +8,7 @@ bl_info = {
     "author": "Gento Yoshino",
     "version": (1, 0),
     "blender": (4, 4, 0),
-    "location": "Top Bar > MyMenu",
+    "location": "Top Bar > MyMenu / Object Properties > FileName",
     "description": "レベルエディタ",
     "warning": "",
     "support": "TESTING",
@@ -70,6 +70,28 @@ class MYADDON_OT_create_ico_sphere(bpy.types.Operator):
 
 
 # ==========================================
+# オペレータクラス：file_name カスタムプロパティ追加
+# ==========================================
+class MYADDON_OT_add_filename(bpy.types.Operator):
+    bl_idname = "myaddon.add_filename"
+    bl_label = "FileName 追加"
+    bl_description = "選択中のオブジェクトに file_name カスタムプロパティを追加します"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        obj = context.object
+
+        if obj is None:
+            self.report({'WARNING'}, "オブジェクトが選択されていません。")
+            return {'CANCELLED'}
+
+        obj["file_name"] = ""
+
+        self.report({'INFO'}, "file_name を追加しました。")
+        return {'FINISHED'}
+
+
+# ==========================================
 # オペレータクラス：シーン出力
 # ==========================================
 class MYADDON_OT_export_scene(bpy.types.Operator, ExportHelper):
@@ -99,11 +121,8 @@ class MYADDON_OT_export_scene(bpy.types.Operator, ExportHelper):
         for _ in range(level):
             indent += "\t"
 
-        # オブジェクト名
-        self.write_and_print(
-            file,
-            indent + obj.type + " - " + obj.name
-        )
+        # オブジェクト種別を出力
+        self.write_and_print(file, indent + obj.type)
 
         # ローカルトランスフォームを取得
         trans, rot, scale = obj.matrix_local.decompose()
@@ -117,7 +136,7 @@ class MYADDON_OT_export_scene(bpy.types.Operator, ExportHelper):
         # トランスフォーム情報を出力
         self.write_and_print(
             file,
-            indent + "Trans({:.6f},{:.6f},{:.6f})".format(
+            indent + "T %.6f %.6f %.6f" % (
                 trans.x,
                 trans.y,
                 trans.z
@@ -126,7 +145,7 @@ class MYADDON_OT_export_scene(bpy.types.Operator, ExportHelper):
 
         self.write_and_print(
             file,
-            indent + "Rot({:.6f},{:.6f},{:.6f})".format(
+            indent + "R %.6f %.6f %.6f" % (
                 rot_x,
                 rot_y,
                 rot_z
@@ -135,13 +154,27 @@ class MYADDON_OT_export_scene(bpy.types.Operator, ExportHelper):
 
         self.write_and_print(
             file,
-            indent + "Scale({:.6f},{:.6f},{:.6f})".format(
+            indent + "S %.6f %.6f %.6f" % (
                 scale.x,
                 scale.y,
                 scale.z
             )
         )
 
+        # デバッグ用にオブジェクト名を出力
+        self.write_and_print(
+            file,
+            indent + "Name %s" % obj.name
+        )
+
+        # file_name カスタムプロパティがあれば出力
+        if "file_name" in obj:
+            self.write_and_print(
+                file,
+                indent + "N %s" % obj["file_name"]
+            )
+
+        self.write_and_print(file, indent + "END")
         self.write_and_print(file, "")
 
         # 子オブジェクトを再帰的に出力
@@ -181,6 +214,32 @@ class MYADDON_OT_export_scene(bpy.types.Operator, ExportHelper):
         self.report({'INFO'}, "シーン情報をExportしました")
 
         return {'FINISHED'}
+
+
+# ==========================================
+# パネルクラス：file_name 表示・編集
+# ==========================================
+class OBJECT_PT_file_name(bpy.types.Panel):
+    bl_idname = "OBJECT_PT_file_name"
+    bl_label = "FileName"
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
+    bl_context = "object"
+
+    def draw(self, context):
+        layout = self.layout
+        obj = context.object
+
+        if obj is None:
+            layout.label(text="オブジェクトが選択されていません。")
+            return
+
+        # file_name がある場合は編集欄を表示
+        if "file_name" in obj:
+            layout.prop(obj, '["file_name"]', text="FileName")
+        else:
+            # file_name がない場合は追加ボタンを表示
+            layout.operator(MYADDON_OT_add_filename.bl_idname)
 
 
 # ==========================================
@@ -227,7 +286,9 @@ def menu_func(self, context):
 classes = (
     MYADDON_OT_stretch_vertex,
     MYADDON_OT_create_ico_sphere,
+    MYADDON_OT_add_filename,
     MYADDON_OT_export_scene,
+    OBJECT_PT_file_name,
     TOPBAR_MT_my_menu,
 )
 
