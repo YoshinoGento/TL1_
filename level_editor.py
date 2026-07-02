@@ -1,5 +1,8 @@
 import bpy
 import math
+import copy
+import gpu
+import gpu_extras.batch
 from bpy_extras.io_utils import ExportHelper
 
 # ブレンダーに登録するアドオン情報
@@ -100,7 +103,6 @@ class MYADDON_OT_export_scene(bpy.types.Operator, ExportHelper):
     bl_description = "現在のシーン内のオブジェクト情報をファイルに出力します"
     bl_options = {'REGISTER'}
 
-    # 出力ファイルの拡張子
     filename_ext = ".scene"
 
     def write_and_print(self, file, text):
@@ -116,24 +118,19 @@ class MYADDON_OT_export_scene(bpy.types.Operator, ExportHelper):
         オブジェクトを1つ出力し、その子オブジェクトも再帰的に出力する関数
         """
 
-        # 深さに応じてインデントを作る
         indent = ""
         for _ in range(level):
             indent += "\t"
 
-        # オブジェクト種別を出力
         self.write_and_print(file, indent + obj.type)
 
-        # ローカルトランスフォームを取得
         trans, rot, scale = obj.matrix_local.decompose()
         rot = rot.to_euler()
 
-        # 回転をラジアンから度数に変換
         rot_x = math.degrees(rot.x)
         rot_y = math.degrees(rot.y)
         rot_z = math.degrees(rot.z)
 
-        # トランスフォーム情報を出力
         self.write_and_print(
             file,
             indent + "T %.6f %.6f %.6f" % (
@@ -161,13 +158,11 @@ class MYADDON_OT_export_scene(bpy.types.Operator, ExportHelper):
             )
         )
 
-        # デバッグ用にオブジェクト名を出力
         self.write_and_print(
             file,
             indent + "Name %s" % obj.name
         )
 
-        # file_name カスタムプロパティがあれば出力
         if "file_name" in obj:
             self.write_and_print(
                 file,
@@ -177,7 +172,6 @@ class MYADDON_OT_export_scene(bpy.types.Operator, ExportHelper):
         self.write_and_print(file, indent + "END")
         self.write_and_print(file, "")
 
-        # 子オブジェクトを再帰的に出力
         for child in obj.children:
             self.parse_scene_recursive(file, child, level + 1)
 
@@ -199,7 +193,6 @@ class MYADDON_OT_export_scene(bpy.types.Operator, ExportHelper):
             with open(self.filepath, "w", encoding="utf-8") as file:
                 self.write_and_print(file, "SCENE")
 
-                # シーン直下のオブジェクトだけを起点にする
                 for obj in scene.objects:
                     if obj.parent is not None:
                         continue
@@ -234,12 +227,105 @@ class OBJECT_PT_file_name(bpy.types.Panel):
             layout.label(text="オブジェクトが選択されていません。")
             return
 
-        # file_name がある場合は編集欄を表示
         if "file_name" in obj:
             layout.prop(obj, '["file_name"]', text="FileName")
         else:
-            # file_name がない場合は追加ボタンを表示
             layout.operator(MYADDON_OT_add_filename.bl_idname)
+
+
+# ==========================================
+# コライダー描画クラス
+# ==========================================
+class DrawCollider:
+    """
+    3Dビュー上に、各オブジェクトの周りのBoxを描画するクラス
+    """
+
+    handle = None
+
+    @staticmethod
+    def draw_collider():
+        context = bpy.context
+        scene = context.scene
+
+        if scene is None:
+            return
+
+        # 頂点データ
+        vertices = {"pos": []}
+
+        # インデックスデータ
+        indices = []
+
+        # 立方体の8頂点分のオフセット
+        offsets = [
+            [-0.5, -0.5, -0.5],
+            [+0.5, -0.5, -0.5],
+            [-0.5, +0.5, -0.5],
+            [+0.5, +0.5, -0.5],
+            [-0.5, -0.5, +0.5],
+            [+0.5, -0.5, +0.5],
+            [-0.5, +0.5, +0.5],
+            [+0.5, +0.5, +0.5],
+        ]
+
+        # 今回は一律サイズのBox
+        size = [2.0, 2.0, 2.0]
+
+        # シーン内の全オブジェクトを走査
+        for obj in scene.objects:
+            start = len(vertices["pos"])
+
+            # Boxの8頂点を追加
+            for offset in offsets:
+                pos = copy.copy(obj.location)
+
+                pos.x += offset[0] * size[0]
+                pos.y += offset[1] * size[1]
+                pos.z += offset[2] * size[2]
+
+                vertices["pos"].append(pos)
+
+            # 前面の4辺
+            indices.append([start + 0, start + 1])
+            indices.append([start + 2, start + 3])
+            indices.append([start + 0, start + 2])
+            indices.append([start + 1, start + 3])
+
+            # 奥面の4辺
+            indices.append([start + 4, start + 5])
+            indices.append([start + 6, start + 7])
+            indices.append([start + 4, start + 6])
+            indices.append([start + 5, start + 7])
+
+            # 前面と奥面をつなぐ4辺
+            indices.append([start + 0, start + 4])
+            indices.append([start + 1, start + 5])
+            indices.append([start + 2, start + 6])
+            indices.append([start + 3, start + 7])
+
+        if len(vertices["pos"]) == 0 or len(indices) == 0:
+            return
+
+        # 単色描画用シェーダー
+        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+
+        # 線描画用バッチを作成
+        batch = gpu_extras.batch.batch_for_shader(
+            shader,
+            "LINES",
+            vertices,
+            indices=indices
+        )
+
+        # 水色
+        color = [0.5, 1.0, 1.0, 1.0]
+
+        shader.bind()
+        shader.uniform_float("color", color)
+
+        # 描画
+        batch.draw(shader)
 
 
 # ==========================================
@@ -302,6 +388,15 @@ def register():
 
     bpy.types.TOPBAR_MT_editor_menus.append(menu_func)
 
+    # 3Dビューにコライダー描画関数を登録
+    if DrawCollider.handle is None:
+        DrawCollider.handle = bpy.types.SpaceView3D.draw_handler_add(
+            DrawCollider.draw_collider,
+            (),
+            "WINDOW",
+            "POST_VIEW"
+        )
+
     print("レベルエディタが有効化されました。")
 
 
@@ -310,6 +405,14 @@ def register():
 # ==========================================
 def unregister():
     bpy.types.TOPBAR_MT_editor_menus.remove(menu_func)
+
+    # 3Dビューのコライダー描画関数を解除
+    if DrawCollider.handle is not None:
+        bpy.types.SpaceView3D.draw_handler_remove(
+            DrawCollider.handle,
+            "WINDOW"
+        )
+        DrawCollider.handle = None
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
